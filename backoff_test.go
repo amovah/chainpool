@@ -22,8 +22,8 @@ func TestBackoffExponentialCapped(t *testing.T) {
 
 func TestBackoffDefaultsWhenZero(t *testing.T) {
 	b := newBackoff(BackoffConfig{})
-	if b.next() != 50*time.Millisecond {
-		t.Fatalf("default initial = %v, want 50ms", b.next())
+	if got := b.next(); got != 50*time.Millisecond {
+		t.Fatalf("default initial = %v, want 50ms", got)
 	}
 }
 
