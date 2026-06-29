@@ -40,7 +40,11 @@ func (p *Pool) doClassified(ctx context.Context, req Request, rc respClassifier)
 	copy(ordered, p.nodes)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].priority > ordered[j].priority })
 
-	deadline := p.clock.Now().Add(p.timeout)
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	deadline := p.clock.Now().Add(timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}

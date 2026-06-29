@@ -285,3 +285,17 @@ func TestPoolStableSortTriesPrimaryFirst(t *testing.T) {
 		t.Fatal("second node should not be touched when both have equal priority")
 	}
 }
+
+func TestPoolZeroTimeoutStillBounded(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	bad := newFakeServer(scriptedResponse{status: 500, body: "x"})
+	defer bad.close()
+
+	p := buildPool(c, &recordingHook{}, nil, testNode("a", bad.url(), 100, c, 1000))
+	p.timeout = 0 // unset
+
+	_, err := p.Do(context.Background(), Request{Method: "GET"})
+	if !errors.Is(err, ErrAllNodesUnavailable) {
+		t.Fatalf("expected bounded failure, got %v", err)
+	}
+}
