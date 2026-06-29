@@ -1,0 +1,18 @@
+defaults:
+  rate_rps: 10
+  timeout: 8s
+  breaker: { fail_threshold: 5, cooldown: 30s, auth_fail_threshold: 1, auth_cooldown: 5m }
+  backoff: { initial: 50ms, max: 2s, factor: 2.0 }
+  fallback_rpc_codes: [-32603, -32005]
+chains:
+  ethereum:
+    timeout: 10s
+    nodes:
+      - name: alchemy
+        url: https://eth.example/v2/x
+        priority: 100
+        rate_rps: 25
+        headers: { Authorization: "Bearer ${TEST_ALCHEMY_KEY}" }
+      - name: ankr
+        url: https://rpc.example/eth
+        priority: 50

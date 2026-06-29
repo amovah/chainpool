@@ -1,0 +1,10 @@
+{
+  "defaults": { "rate_rps": 10, "timeout": "8s" },
+  "chains": {
+    "solana": {
+      "nodes": [
+        { "name": "sol", "url": "https://sol.example", "priority": 10, "rate_rps": 8 }
+      ]
+    }
+  }
+}
