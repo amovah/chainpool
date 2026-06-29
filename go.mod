@@ -1,5 +1,5 @@
 module github.com/alimovahedi/chainpool
 
-go 1.25.0
+go 1.22
 
-require golang.org/x/time v0.15.0 // indirect
+require golang.org/x/time v0.5.0
