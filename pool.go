@@ -2,11 +2,16 @@ package chainpool
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 )
 
 type respClassifier func(resp *Response) errKind
+
+// sentinel errors recorded for nodes that are skipped without an HTTP attempt.
+var errNodeCircuitOpen = errors.New("chainpool: node circuit open")
+var errNodeRateLimited = errors.New("chainpool: node rate limited")
 
 // Pool routes requests across priority-ordered nodes for a single chain.
 type Pool struct {
@@ -44,18 +49,18 @@ func (p *Pool) doClassified(ctx context.Context, req Request, rc respClassifier)
 	attempts := map[string]*NodeAttempt{}
 
 	for {
-		progressed := false
 		for _, n := range ordered {
 			if !n.brk.Allowed() {
 				p.hook.OnFallback(n.name, "", "open")
+				recordAttempt(attempts, n.name, nil, errNodeCircuitOpen)
 				continue
 			}
 			if !n.lim.Allow() {
 				p.hook.OnRateLimited(n.name)
+				recordAttempt(attempts, n.name, nil, errNodeRateLimited)
 				continue
 			}
 
-			progressed = true
 			p.hook.OnRequest(n.name, req)
 			start := p.clock.Now()
 			resp, err := n.do(ctx, req)
@@ -93,7 +98,6 @@ func (p *Pool) doClassified(ctx context.Context, req Request, rc respClassifier)
 		if p.clock.Now().After(deadline) || p.clock.Now().Equal(deadline) {
 			return nil, p.allFailed(attempts)
 		}
-		_ = progressed
 		if err := p.clock.Sleep(ctx, bo.next()); err != nil {
 			return nil, err
 		}

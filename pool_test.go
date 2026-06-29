@@ -7,6 +7,21 @@ import (
 	"time"
 )
 
+// cancelOnResultHook cancels the provided context after the first OnResult call.
+// Used to simulate context cancellation between the HTTP attempt and the backoff Sleep.
+type cancelOnResultHook struct {
+	NopHook
+	cancel context.CancelFunc
+	fired  bool
+}
+
+func (h *cancelOnResultHook) OnResult(node string, status int, err error, latency time.Duration) {
+	if !h.fired {
+		h.fired = true
+		h.cancel()
+	}
+}
+
 func TestPoolPrefersHighestPriority(t *testing.T) {
 	c := newFakeClock(time.Unix(0, 0))
 	good := newFakeServer(scriptedResponse{status: 200, body: "ok"})
@@ -165,5 +180,108 @@ func TestPoolReturnsCallerErrorWithoutFallback(t *testing.T) {
 	}
 	if secondary.count() != 0 {
 		t.Fatal("4xx caller error must not fall back")
+	}
+}
+
+// TestDoClassifiedClassifierUpgradesKindReturnToKindNode verifies that a
+// respClassifier returning kindNode for an HTTP 200 causes fallback to the
+// secondary node, and that the secondary's response is returned.
+func TestDoClassifiedClassifierUpgradesKindReturnToKindNode(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	primary := newFakeServer(scriptedResponse{status: 200, body: "primary-body"})
+	defer primary.close()
+	secondary := newFakeServer(scriptedResponse{status: 200, body: "secondary-body"})
+	defer secondary.close()
+
+	hook := &recordingHook{}
+	p := buildPool(c, hook, nil,
+		testNode("primary", primary.url(), 100, c, 1000),
+		testNode("secondary", secondary.url(), 50, c, 1000),
+	)
+
+	// Classifier upgrades kindReturn (200) to kindNode only for the primary,
+	// forcing fallback to the secondary which is allowed to return normally.
+	alwaysNode := respClassifier(func(resp *Response) errKind {
+		if resp.Node == "primary" {
+			return kindNode
+		}
+		return kindReturn
+	})
+
+	resp, err := p.doClassified(context.Background(), Request{Method: "GET"}, alwaysNode)
+	if err != nil {
+		t.Fatalf("doClassified err = %v", err)
+	}
+	if resp.Node != "secondary" {
+		t.Fatalf("served by %q, want secondary", resp.Node)
+	}
+	if primary.count() != 1 {
+		t.Fatalf("primary hit count = %d, want 1", primary.count())
+	}
+	if secondary.count() != 1 {
+		t.Fatalf("secondary hit count = %d, want 1", secondary.count())
+	}
+}
+
+// TestPoolEmptyReturnsErrNoNodes verifies that Do returns ErrNoNodes immediately
+// when the pool has no nodes.
+func TestPoolEmptyReturnsErrNoNodes(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	p := buildPool(c, &recordingHook{}, nil)
+	_, err := p.Do(context.Background(), Request{Method: "GET"})
+	if !errors.Is(err, ErrNoNodes) {
+		t.Fatalf("err = %v, want ErrNoNodes", err)
+	}
+}
+
+// TestPoolContextCancelledDuringBackoff verifies that cancelling the context
+// between the failed attempt and the backoff sleep causes Do to return
+// context.Canceled rather than continuing to retry.
+func TestPoolContextCancelledDuringBackoff(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	bad := newFakeServer(scriptedResponse{status: 500, body: "err"})
+	defer bad.close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// cancelOnResultHook cancels ctx after the first OnResult so the
+	// subsequent fakeClock.Sleep returns context.Canceled.
+	hook := &cancelOnResultHook{cancel: cancel}
+	p := buildPool(c, hook, nil,
+		testNode("bad", bad.url(), 100, c, 1000),
+	)
+	p.timeout = 10 * time.Minute // long enough not to expire naturally
+
+	_, err := p.Do(ctx, Request{Method: "GET"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// TestPoolStableSortTriesPrimaryFirst verifies that two nodes with equal
+// priority are tried in slice order (stable sort preserves insertion order).
+func TestPoolStableSortTriesPrimaryFirst(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	first := newFakeServer(scriptedResponse{status: 200, body: "first"})
+	defer first.close()
+	second := newFakeServer(scriptedResponse{status: 200, body: "second"})
+	defer second.close()
+
+	hook := &recordingHook{}
+	// Both nodes have equal priority; stable sort must preserve slice order.
+	p := buildPool(c, hook, nil,
+		testNode("first", first.url(), 50, c, 1000),
+		testNode("second", second.url(), 50, c, 1000),
+	)
+	resp, err := p.Do(context.Background(), Request{Method: "GET"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.Node != "first" {
+		t.Fatalf("served by %q, want first (stable sort)", resp.Node)
+	}
+	if second.count() != 0 {
+		t.Fatal("second node should not be touched when both have equal priority")
 	}
 }
