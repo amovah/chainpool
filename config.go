@@ -120,10 +120,33 @@ func LoadConfig(path string) (Config, error) {
 
 func (c *Config) applyDefaults() {
 	d := c.Defaults
+	// Establish spec-mandated library defaults for any zero field.
+	if d.Breaker.FailThreshold == 0 {
+		d.Breaker.FailThreshold = 5
+	}
+	if d.Breaker.Cooldown == 0 {
+		d.Breaker.Cooldown = Duration(30 * time.Second)
+	}
+	if d.Breaker.AuthFailThreshold == 0 {
+		d.Breaker.AuthFailThreshold = 1
+	}
+	if d.Breaker.AuthCooldown == 0 {
+		d.Breaker.AuthCooldown = Duration(5 * time.Minute)
+	}
+	if d.Backoff.Initial == 0 {
+		d.Backoff.Initial = Duration(50 * time.Millisecond)
+	}
+	if d.Backoff.Max == 0 {
+		d.Backoff.Max = Duration(2 * time.Second)
+	}
+	if d.Backoff.Factor == 0 {
+		d.Backoff.Factor = 2.0
+	}
 	if len(d.FallbackRPCCodes) == 0 {
 		d.FallbackRPCCodes = []int{-32603}
-		c.Defaults = d
 	}
+	c.Defaults = d
+
 	for cname, chain := range c.Chains {
 		if chain.Backoff == (BackoffConfig{}) {
 			chain.Backoff = d.Backoff
@@ -139,8 +162,19 @@ func (c *Config) applyDefaults() {
 			if n.Timeout == 0 {
 				n.Timeout = d.Timeout
 			}
-			if n.Breaker == (BreakerConfig{}) {
-				n.Breaker = d.Breaker
+			// Per-field fill for breaker so a node that sets only one field
+			// still inherits the remaining defaults (closes partial-config gap).
+			if n.Breaker.FailThreshold == 0 {
+				n.Breaker.FailThreshold = d.Breaker.FailThreshold
+			}
+			if n.Breaker.Cooldown == 0 {
+				n.Breaker.Cooldown = d.Breaker.Cooldown
+			}
+			if n.Breaker.AuthFailThreshold == 0 {
+				n.Breaker.AuthFailThreshold = d.Breaker.AuthFailThreshold
+			}
+			if n.Breaker.AuthCooldown == 0 {
+				n.Breaker.AuthCooldown = d.Breaker.AuthCooldown
 			}
 		}
 		c.Chains[cname] = chain

@@ -70,6 +70,14 @@ func (p *Pool) doClassified(ctx context.Context, req Request, rc respClassifier)
 			resp, err := n.do(ctx, req)
 			p.hook.OnResult(n.name, statusOf(resp), err, p.clock.Now().Sub(start))
 
+			// Bail immediately if the PARENT context was cancelled or expired.
+			// Node-local timeouts use a child context inside n.do, so a
+			// node-only timeout leaves ctx.Err() == nil and falls through to
+			// the normal classification path.
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
+			}
+
 			kind := classifyHTTP(resp, err)
 			if kind == kindReturn && rc != nil && resp != nil {
 				kind = rc(resp)

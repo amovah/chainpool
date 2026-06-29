@@ -22,6 +22,22 @@ func (h *cancelOnResultHook) OnResult(node string, status int, err error, latenc
 	}
 }
 
+// cancelOnRequestHook cancels the provided context the first time OnRequest is
+// called. Used to simulate parent-context cancellation arriving during the
+// in-flight attempt on the first node.
+type cancelOnRequestHook struct {
+	NopHook
+	cancel context.CancelFunc
+	fired  bool
+}
+
+func (h *cancelOnRequestHook) OnRequest(node string, req Request) {
+	if !h.fired {
+		h.fired = true
+		h.cancel()
+	}
+}
+
 func TestPoolPrefersHighestPriority(t *testing.T) {
 	c := newFakeClock(time.Unix(0, 0))
 	good := newFakeServer(scriptedResponse{status: 200, body: "ok"})
@@ -297,5 +313,43 @@ func TestPoolZeroTimeoutStillBounded(t *testing.T) {
 	_, err := p.Do(context.Background(), Request{Method: "GET"})
 	if !errors.Is(err, ErrAllNodesUnavailable) {
 		t.Fatalf("expected bounded failure, got %v", err)
+	}
+}
+
+// TestPoolParentContextCancelledDuringAttempt verifies that when the parent
+// context is cancelled while a node attempt is in flight, doClassified returns
+// context.Canceled immediately — without hitting the secondary node and without
+// leaving the primary's circuit breaker OPEN.
+func TestPoolParentContextCancelledDuringAttempt(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	primary := newFakeServer(scriptedResponse{status: 200, body: "primary"})
+	defer primary.close()
+	secondary := newFakeServer(scriptedResponse{status: 200, body: "secondary"})
+	defer secondary.close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// cancelOnRequestHook cancels ctx as soon as the first OnRequest fires,
+	// so n.do runs with an already-cancelled parent context.
+	hook := &cancelOnRequestHook{cancel: cancel}
+	p := buildPool(c, hook, nil,
+		testNode("primary", primary.url(), 100, c, 1000),
+		testNode("secondary", secondary.url(), 50, c, 1000),
+	)
+	p.timeout = 10 * time.Minute // far future — must not expire naturally
+
+	_, err := p.Do(ctx, Request{Method: "GET"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if secondary.count() != 0 {
+		t.Fatalf("secondary hit count = %d, want 0 (must not be reached after parent cancel)", secondary.count())
+	}
+	// Primary breaker must not be OPEN — RecordFail must not have been called.
+	for _, stat := range p.Stats() {
+		if stat.Name == "primary" && stat.State == "open" {
+			t.Fatal("primary breaker must not be OPEN after parent context cancellation")
+		}
 	}
 }
