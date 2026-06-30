@@ -35,3 +35,21 @@ result, err := rpc.Call(ctx, "eth_blockNumber", nil)
   codes (default `-32603`) are treated as node errors and fall back.
 - When all nodes are exhausted, requests back off until the pool timeout, then
   return `AllFailedError` (unwraps to `ErrAllNodesUnavailable`).
+
+## Gateway
+
+Expose a `Manager` as a local HTTP JSON-RPC node so any client can reach the pool.
+The URL path selects the chain; requests fan out across nodes with the pool's
+rate-limiting, circuit-breaking, and failover.
+
+```go
+m, _ := chainpool.New(cfg)
+go gateway.Serve(ctx, m, "127.0.0.1:8545")
+
+// from anywhere, in any language:
+eth, _ := ethclient.Dial("http://localhost:8545/ethereum")
+```
+
+Single and batch JSON-RPC requests are forwarded verbatim. Routing failures
+surface as HTTP status codes: 404 (unknown chain), 405 (non-POST), 502 (all
+nodes unavailable). HTTP only — no WebSocket/subscriptions.
