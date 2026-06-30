@@ -1,4 +1,4 @@
-module github.com/alimovahedi/chainpool
+module github.com/amovah/chainpool
 
 go 1.22
 

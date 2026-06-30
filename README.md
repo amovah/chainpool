@@ -6,7 +6,7 @@ helper. Works for EVM, Solana, TON, and Tron via a generic HTTP transport.
 
 ## Install
 
-    go get github.com/alimovahedi/chainpool
+    go get github.com/amovah/chainpool
 
 ## Quick start
 
@@ -35,5 +35,3 @@ result, err := rpc.Call(ctx, "eth_blockNumber", nil)
   codes (default `-32603`) are treated as node errors and fall back.
 - When all nodes are exhausted, requests back off until the pool timeout, then
   return `AllFailedError` (unwraps to `ErrAllNodesUnavailable`).
-
-See `docs/superpowers/specs/2026-06-29-chainpool-design.md` for the full design.
