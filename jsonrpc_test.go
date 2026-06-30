@@ -69,3 +69,81 @@ func TestRPCCallFallbackCodeTriggersFallback(t *testing.T) {
 		t.Fatal("expected fallback event for -32603")
 	}
 }
+
+func TestDoRPCReturnsBodyVerbatim(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	srv := newFakeServer(scriptedResponse{status: 200, body: `{"jsonrpc":"2.0","id":1,"result":"0x1"}`})
+	defer srv.close()
+
+	p := buildPool(c, &recordingHook{}, nil, testNode("a", srv.url(), 100, c, 1000))
+
+	out, err := p.DoRPC(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}`))
+	if err != nil {
+		t.Fatalf("DoRPC err = %v", err)
+	}
+	if string(out) != `{"jsonrpc":"2.0","id":1,"result":"0x1"}` {
+		t.Fatalf("body = %s", out)
+	}
+}
+
+func TestDoRPCFallbackCodeTriggersFailover(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	bad := newFakeServer(scriptedResponse{status: 200, body: `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"busy"}}`})
+	defer bad.close()
+	good := newFakeServer(scriptedResponse{status: 200, body: `{"jsonrpc":"2.0","id":1,"result":"0x2"}`})
+	defer good.close()
+
+	// Higher-priority node fails with a fallback code; pool must fall back within the same round.
+	p := buildPool(c, &recordingHook{}, []int{-32000},
+		testNode("bad", bad.url(), 100, c, 1000),
+		testNode("good", good.url(), 50, c, 1000),
+	)
+
+	out, err := p.DoRPC(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"x"}`))
+	if err != nil {
+		t.Fatalf("DoRPC err = %v", err)
+	}
+	if string(out) != `{"jsonrpc":"2.0","id":1,"result":"0x2"}` {
+		t.Fatalf("body = %s, want good node result", out)
+	}
+	if bad.count() == 0 {
+		t.Fatal("bad node should have been tried before fallback")
+	}
+}
+
+func TestDoRPCBatchFallbackTriggersFailover(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	bad := newFakeServer(scriptedResponse{status: 200, body: `[{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"x"}}]`})
+	defer bad.close()
+	good := newFakeServer(scriptedResponse{status: 200, body: `[{"jsonrpc":"2.0","id":1,"result":"0x9"}]`})
+	defer good.close()
+
+	p := buildPool(c, &recordingHook{}, []int{-32000},
+		testNode("bad", bad.url(), 100, c, 1000),
+		testNode("good", good.url(), 50, c, 1000),
+	)
+
+	out, err := p.DoRPC(context.Background(), []byte(`[{"jsonrpc":"2.0","id":1,"method":"x"}]`))
+	if err != nil {
+		t.Fatalf("DoRPC err = %v", err)
+	}
+	if string(out) != `[{"jsonrpc":"2.0","id":1,"result":"0x9"}]` {
+		t.Fatalf("body = %s, want good batch result", out)
+	}
+}
+
+func TestDoRPCBatchSuccessPassthrough(t *testing.T) {
+	c := newFakeClock(time.Unix(0, 0))
+	srv := newFakeServer(scriptedResponse{status: 200, body: `[{"jsonrpc":"2.0","id":1,"result":"0xa"},{"jsonrpc":"2.0","id":2,"result":"0xb"}]`})
+	defer srv.close()
+
+	p := buildPool(c, &recordingHook{}, []int{-32000}, testNode("a", srv.url(), 100, c, 1000))
+
+	out, err := p.DoRPC(context.Background(), []byte(`[{"jsonrpc":"2.0","id":1,"method":"x"},{"jsonrpc":"2.0","id":2,"method":"y"}]`))
+	if err != nil {
+		t.Fatalf("DoRPC err = %v", err)
+	}
+	if string(out) != `[{"jsonrpc":"2.0","id":1,"result":"0xa"},{"jsonrpc":"2.0","id":2,"result":"0xb"}]` {
+		t.Fatalf("body = %s", out)
+	}
+}
